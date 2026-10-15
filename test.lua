@@ -188,22 +188,27 @@ G2L["18"] = Instance.new("UIAspectRatioConstraint", G2L["17"]);
 local function C_11()
 local script = G2L["11"];
 	-- ═══════════════════════════════════════════════════════════════════════
-	--  ForExecutorFromStudio.lua · v3.4 (FIXED: gzip + parent + filename)
+	--  ForExecutorFromStudio.lua · v3.6
 	-- ═══════════════════════════════════════════════════════════════════════
-	--  ★ v3.4 ใหม่ (แก้ 5 จุด):
-	--    [1] HTTP บังคับ Accept-Encoding: identity → กัน gzip กลับมาเป็นไฟล์พัง
-	--    [2] ถ้า response เริ่ม 1F 8B (gzip) → throw ทันที ไม่เขียนไฟล์พัง
-	--    [3] ถ้า response เป็น HTML → throw (น่าจะ 403/404)
-	--    [4] หลัง writefile → readfile กลับมาเทียบขนาด
-	--    [5] script.Parent ถ้าไม่ใช่ ImageLabel → หาลูกให้อัตโนมัติ
-	--    [6] ชื่อไฟล์ cache = djb2(url) ล้วน (ไม่มี #url ต่อท้าย กันชื่อเพี้ยน)
+	--  ★ v3.6 ใหม่ (ใช้ pattern เดียวกับ Xless):
+	--    • cache filename = hash ล้วน ไม่มีนามสกุล (getcustomasset รับได้)
+	--    • HTTP: ลอง game:HttpGet ก่อนเป็นอันดับ 1 (เสถียรสุด)
+	--    • เช็คแค่ content:find("<!DOCTYPE html>") → กัน 404
+	--    • ลบ Accept-Encoding gzip ที่ไม่จำเป็นออก
+	--    • บังคับ rename target เป็น "videoframe" เสมอ
+	--    • ถ้า script.Parent เป็น Frame → หาลูก ImageLabel ให้อัตโนมัติ
+	--    • print magic 4 ไบต์แรก ของทุก response
+	--
+	--  ★★★ URL GitHub raw ต้องมี raw. นำหน้า ★★★
+	--    ✓ https://raw.githubusercontent.com/USER/REPO/main/file.png
+	--    ✗ https://githubusercontent.com/...  ← 404
 	-- ═══════════════════════════════════════════════════════════════════════
 	
 	-- ╔═══════════════════════════════════════════════════════════════════╗
 	-- ║  ★★★ แก้เฉพาะในกรอบนี้ ★★★                                        ║
 	-- ╚═══════════════════════════════════════════════════════════════════╝
 	local URLS = {
-		"https://github.com/dialev/Assets-SS/blob/12edcc041575ade659386bc78c414904fd3dfbcd/pf.png",   -- ← หน้า 1 : sprite_sheet.png
+		"https://raw.githubusercontent.com/dialev/Assets-SS/12edcc041575ade659386bc78c414904fd3dfbcd/pf.png?raw=true",   -- ← หน้า 1
 	}
 	
 	local CFG = {
@@ -218,9 +223,9 @@ local script = G2L["11"];
 		AutoPlay      = true,
 		Folder        = "from_studio",
 		Refresh       = false,
-		Retries       = 3,
 		Timeout       = 180,
 		Verbose       = true,
+		TargetName    = "videoframe",
 	}
 	-- ╔═══════════════════════════════════════════════════════════════════╗
 	-- ║  ★★★ อย่าแตะอะไรด้านล่างนี้ ★★★                                    ║
@@ -233,6 +238,7 @@ local script = G2L["11"];
 				assert(type(u) == "string" and (u:match("^https?://") or u:match("^rbxassetid://") or u:match("^rbxasset://")),
 					("URLS[%d] ต้องเป็น http(s) link"):format(i))
 				assert(u:find("xxxxxxxx") == nil, ("URLS[%d] ลืมแก้ URL!"):format(i))
+				assert(u:find("USER/REPO") == nil, ("URLS[%d] ลืมแก้ USER/REPO!"):format(i))
 			end
 			assert(CFG.Columns >= 1 and CFG.Rows >= 1, "Columns/Rows ต้อง >= 1")
 			assert(CFG.FramesPerPage == CFG.Columns * CFG.Rows, "FramesPerPage ต้อง = Columns × Rows")
@@ -264,134 +270,111 @@ local script = G2L["11"];
 	do
 		local parent = (typeof(script) == "Instance") and script.Parent or nil
 		local cand = nil
+		local want = tostring(CFG.TargetName or "videoframe"):lower()
+	
 		if parent then
-			if parent:IsA("ImageLabel") or parent:IsA("ImageButton") then
+			if parent.Name:lower() == want
+				and (parent:IsA("ImageLabel") or parent:IsA("ImageButton")) then
 				cand = parent
-			else
+			end
+			if not cand then
 				for _, d in ipairs(parent:GetDescendants()) do
-					if d:IsA("ImageLabel") or d:IsA("ImageButton") then
+					if d.Name:lower() == want
+						and (d:IsA("ImageLabel") or d:IsA("ImageButton")) then
 						cand = d; break
 					end
 				end
 			end
+			if not cand then
+				if parent:IsA("ImageLabel") or parent:IsA("ImageButton") then
+					cand = parent
+				else
+					for _, d in ipairs(parent:GetDescendants()) do
+						if d:IsA("ImageLabel") or d:IsA("ImageButton") then
+							cand = d; break
+						end
+					end
+				end
+			end
 		end
+	
 		if not cand then
 			error("[ForExecutorFromStudio] ไม่เจอ ImageLabel/ImageButton ใต้ " ..
 				(parent and parent:GetFullName() or "script.Parent=nil"), 0)
 		end
+	
 		target = cand
+		if target.Name ~= CFG.TargetName then
+			pcall(function() target.Name = CFG.TargetName end)
+		end
+	
 		if CFG.Verbose then
 			warn("[ForExecutorFromStudio] target = " .. cand:GetFullName() ..
-				" (" .. cand.ClassName .. ")")
+				" → rename → " .. target.Name)
 		end
 	end
 	
-	-- ── HTTP ─────────────────────────────────────────────────────────────
-	local function isGzip(s)
-		return type(s) == "string" and #s >= 2
-			and s:byte(1) == 0x1F and s:byte(2) == 0x8B
-	end
-	local function isHtml(s)
-		if type(s) ~= "string" or #s < 20 then return false end
-		local head = s:sub(1, 200):lower()
-		return head:find("<!doctype") ~= nil or head:find("<html") ~= nil
-	end
-	
+	-- ── HTTP: game:HttpGet first + check HTML ────────────────────────────
 	local function httpGet(url)
 		local lastErr = "unknown"
-		local HEADERS = {
-			["Accept-Encoding"] = "identity",
-			["Accept"]          = "image/*,*/*;q=0.8",
-			["User-Agent"]      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Roblox/Executor",
-		}
 	
-		local function validate(res, name)
-			if type(res) ~= "string" or #res == 0 then
-				return nil, name .. ": empty"
-			end
-			if isGzip(res) then
-				return nil, name .. ": gzip (เซิร์ฟเวอร์ไม่สนใจ Accept-Encoding: identity)"
-			end
-			if isHtml(res) then
-				return nil, name .. ": HTML response (403/404?)"
-			end
-			if #res < 100 then
-				return nil, name .. ": เล็กเกิน (" .. #res .. "B)"
-			end
-			return res
-		end
-	
-		local methods = {
-			{ "request", function()
-				if type(request) ~= "function" then error("n/a") end
-				local r = request({ Url = url, Method = "GET", Headers = HEADERS })
-				if not r then error("no response") end
-				if r.StatusCode and (r.StatusCode < 200 or r.StatusCode >= 300) then
-					error("HTTP " .. tostring(r.StatusCode))
-				end
-				return r.Body
-			end },
-			{ "http_request", function()
-				if type(http_request) ~= "function" then error("n/a") end
-				local r = http_request({ Url = url, Method = "GET", Headers = HEADERS })
-				if not r then error("no response") end
-				if r.StatusCode and (r.StatusCode < 200 or r.StatusCode >= 300) then
-					error("HTTP " .. tostring(r.StatusCode))
-				end
-				return r.Body
-			end },
-			{ "syn.request", function()
-				if type(syn) ~= "table" or type(syn.request) ~= "function" then error("n/a") end
-				local r = syn.request({ Url = url, Method = "GET", Headers = HEADERS })
-				if not r then error("no response") end
-				if r.StatusCode and (r.StatusCode < 200 or r.StatusCode >= 300) then
-					error("HTTP " .. tostring(r.StatusCode))
-				end
-				return r.Body
-			end },
-			{ "game:HttpGet", function()
-				return game:HttpGet(url, true)
-			end },
-		}
-	
-		local tries = math.max(1, tonumber(CFG.Retries) or 3)
-		for attempt = 1, tries do
-			for _, m in ipairs(methods) do
-				local ok, res = pcall(m[2])
-				if ok then
-					local body, err = validate(res, m[1])
-					if body then
-						if CFG.Verbose then
-							print(("[HTTP] ✓ %s · %d bytes · magic=%02X%02X%02X%02X"):format(
-								m[1], #body, body:byte(1) or 0, body:byte(2) or 0,
-								body:byte(3) or 0, body:byte(4) or 0))
-						end
-						return body
+		-- 1) game:HttpGet (เสถียรสุด — Xless ใช้ตัวนี้)
+		do
+			local ok, r = pcall(game.HttpGet, game, url, true)
+			if ok and type(r) == "string" and #r > 0 then
+				if not r:find("<!DOCTYPE html>") and not r:find("<html") then
+					if CFG.Verbose then
+						print(("[HTTP] ✓ game:HttpGet · %d bytes · magic=%02X%02X%02X%02X"):format(
+							#r, r:byte(1) or 0, r:byte(2) or 0, r:byte(3) or 0, r:byte(4) or 0))
 					end
-					lastErr = err
-				else
-					lastErr = m[1] .. ": " .. tostring(res)
+					return r
 				end
+				lastErr = "game:HttpGet: HTML response (404?)"
+			else
+				lastErr = "game:HttpGet: " .. tostring(r)
 			end
-			if attempt < tries then task.wait(0.4 * attempt) end
 		end
+	
+		-- 2) request
+		if type(request) == "function" then
+			local ok, r = pcall(request, { Url = url, Method = "GET" })
+			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
+				if CFG.Verbose then
+					print(("[HTTP] ✓ request · %d bytes · magic=%02X%02X%02X%02X"):format(
+						#r.Body, r.Body:byte(1) or 0, r.Body:byte(2) or 0,
+						r.Body:byte(3) or 0, r.Body:byte(4) or 0))
+				end
+				return r.Body
+			end
+			lastErr = "request failed"
+		end
+	
+		-- 3) http_request
+		if type(http_request) == "function" then
+			local ok, r = pcall(http_request, { Url = url, Method = "GET" })
+			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
+				return r.Body
+			end
+			lastErr = "http_request failed"
+		end
+	
+		-- 4) syn.request
+		if type(syn) == "table" and type(syn.request) == "function" then
+			local ok, r = pcall(syn.request, { Url = url, Method = "GET" })
+			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
+				return r.Body
+			end
+			lastErr = "syn.request failed"
+		end
+	
 		error("HTTP GET failed (" .. url .. ")\n  สาเหตุ: " .. tostring(lastErr), 0)
 	end
 	
-	-- ── hash filename ─────────────────────────────────────────────────────
+	-- ── hash ─────────────────────────────────────────────────────────────
 	local function djb2(s)
 		local h = 5381
 		for i = 1, #s do h = (h * 33 + s:byte(i)) % 4294967296 end
 		return string.format("%08x", h)
-	end
-	local function extOf(url)
-		local pathOnly = url:match("^[^?#]*") or url
-		local e = pathOnly:match("%.([%w]+)$")
-		if not e then return ".png" end
-		e = e:lower()
-		if e == "jpg" or e == "jpeg" then return ".jpg" end
-		if e == "png" or e == "gif" or e == "webp" or e == "bmp" then return "." .. e end
-		return ".png"
 	end
 	
 	local function resolveAsset(url)
@@ -402,17 +385,14 @@ local script = G2L["11"];
 		if not isfolder(root) then pcall(makefolder, root) end
 		if not isfolder(dir)  then pcall(makefolder, dir)  end
 	
-		local fname = dir .. "/" .. djb2(url) .. extOf(url)
+		-- ★ filename = hash ล้วน ไม่มีนามสกุล (แบบ Xless)
+		local fname = dir .. "/" .. djb2(url)
 	
 		if CFG.Refresh or not isfile(fname) then
 			local body = httpGet(url)
 			local ok, werr = pcall(writefile, fname, body)
 			if not ok then error("writefile: " .. tostring(werr), 0) end
 			if not isfile(fname) then error("writefile ok แต่ isfile=false: " .. fname, 0) end
-			local onDisk = #readfile(fname)
-			if onDisk ~= #body then
-				error(("ไฟล์เขียนไม่ครบ! disk=%d body=%d"):format(onDisk, #body), 0)
-			end
 			if CFG.Verbose then
 				print(("[CACHE] wrote %s (%d bytes)"):format(fname, #body))
 			end
@@ -587,8 +567,8 @@ local script = G2L["11"];
 	if CFG.AutoPlay then API:Play() end
 	
 	_G.SpriteFromStudio = API
-	print(("[ForExecutorFromStudio] ✓ %s · %d เฟรม · %d หน้า · %d fps · %dx%d"):format(
-		target:GetFullName(), TOTAL, N, CFG.Fps, FW, FH))
+	print(("[ForExecutorFromStudio] ✓ %s (%s) · %d เฟรม · %d หน้า · %d fps · %dx%d"):format(
+		target:GetFullName(), target.Name, TOTAL, N, CFG.Fps, FW, FH))
 	
 end;
 task.spawn(C_11);
