@@ -188,20 +188,18 @@ G2L["18"] = Instance.new("UIAspectRatioConstraint", G2L["17"]);
 local function C_11()
 local script = G2L["11"];
 	-- ═══════════════════════════════════════════════════════════════════════
-	--  ForExecutorFromStudio.lua · v3.6
+	--  ForExecutorFromStudio.lua · v4.0 (FIX ANIMATION · NO DISTORT · ALWAYS VISIBLE)
 	-- ═══════════════════════════════════════════════════════════════════════
-	--  ★ v3.6 ใหม่ (ใช้ pattern เดียวกับ Xless):
-	--    • cache filename = hash ล้วน ไม่มีนามสกุล (getcustomasset รับได้)
-	--    • HTTP: ลอง game:HttpGet ก่อนเป็นอันดับ 1 (เสถียรสุด)
-	--    • เช็คแค่ content:find("<!DOCTYPE html>") → กัน 404
-	--    • ลบ Accept-Encoding gzip ที่ไม่จำเป็นออก
-	--    • บังคับ rename target เป็น "videoframe" เสมอ
-	--    • ถ้า script.Parent เป็น Frame → หาลูก ImageLabel ให้อัตโนมัติ
-	--    • print magic 4 ไบต์แรก ของทุก response
+	--  ★ v4.0 แก้ปัญหา:
+	--    [1] ภาพไม่ขึ้น    → force Visible=true, ImageTransparency=0, Size>0
+	--    [2] ภาพเบี้ยว     → UIAspectRatioConstraint ตาม FrameSize + ScaleType=Stretch
+	--    [3] ภาพไม่เป็นอนิเมชั่น → set ImageRectOffset + ImageRectSize ทุกเฟรม
+	--    [4] ทะลุ/โปร่งใส  → ImageTransparency=0, BackgroundTransparency=1
+	--    [5] target = "videoframe" บังคับ rename
 	--
-	--  ★★★ URL GitHub raw ต้องมี raw. นำหน้า ★★★
+	--  ★ URL GitHub raw ต้องมี raw. นำหน้า:
 	--    ✓ https://raw.githubusercontent.com/USER/REPO/main/file.png
-	--    ✗ https://githubusercontent.com/...  ← 404
+	--    ✗ https://githubusercontent.com/...
 	-- ═══════════════════════════════════════════════════════════════════════
 	
 	-- ╔═══════════════════════════════════════════════════════════════════╗
@@ -226,6 +224,9 @@ local script = G2L["11"];
 		Timeout       = 180,
 		Verbose       = true,
 		TargetName    = "videoframe",
+		MinSize       = 8,     -- ถ้า Size น้อยกว่านี้ จะตั้ง default
+		ScaleUp       = 4,     -- คูณขนาดถ้าตั้ง default (FW*Scale)
+		AddAspect     = true,  -- ใส่ UIAspectRatioConstraint กันเบี้ยว
 	}
 	-- ╔═══════════════════════════════════════════════════════════════════╗
 	-- ║  ★★★ อย่าแตะอะไรด้านล่างนี้ ★★★                                    ║
@@ -265,7 +266,110 @@ local script = G2L["11"];
 	local RunService  = game:GetService("RunService")
 	local ContentProv = game:GetService("ContentProvider")
 	
-	-- ── TARGET ───────────────────────────────────────────────────────────
+	-- ── HTTP (game:HttpGet first) ────────────────────────────────────────
+	local function httpGet(url)
+		local lastErr = "unknown"
+		do
+			local ok, r = pcall(game.HttpGet, game, url, true)
+			if ok and type(r) == "string" and #r > 0 then
+				if not r:find("<!DOCTYPE html>") and not r:find("<html") then
+					if CFG.Verbose then
+						print(("[HTTP] ✓ game:HttpGet · %d bytes · magic=%02X%02X%02X%02X"):format(
+							#r, r:byte(1) or 0, r:byte(2) or 0, r:byte(3) or 0, r:byte(4) or 0))
+					end
+					return r
+				end
+				lastErr = "game:HttpGet: HTML (404?)"
+			else
+				lastErr = "game:HttpGet: " .. tostring(r)
+			end
+		end
+		if type(request) == "function" then
+			local ok, r = pcall(request, { Url = url, Method = "GET" })
+			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
+				return r.Body
+			end
+			lastErr = "request failed"
+		end
+		if type(http_request) == "function" then
+			local ok, r = pcall(http_request, { Url = url, Method = "GET" })
+			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
+				return r.Body
+			end
+			lastErr = "http_request failed"
+		end
+		if type(syn) == "table" and type(syn.request) == "function" then
+			local ok, r = pcall(syn.request, { Url = url, Method = "GET" })
+			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
+				return r.Body
+			end
+			lastErr = "syn.request failed"
+		end
+		error("HTTP GET failed (" .. url .. ")\n  สาเหตุ: " .. tostring(lastErr), 0)
+	end
+	
+	local function djb2(s)
+		local h = 5381
+		for i = 1, #s do h = (h * 33 + s:byte(i)) % 4294967296 end
+		return string.format("%08x", h)
+	end
+	
+	local function resolveAsset(url)
+		if url:match("^rbxassetid://") or url:match("^rbxasset://") then return url end
+		local root = "SpriteLib"
+		local dir  = root .. "/" .. tostring(CFG.Folder or "from_studio")
+		if not isfolder(root) then pcall(makefolder, root) end
+		if not isfolder(dir)  then pcall(makefolder, dir)  end
+		local fname = dir .. "/" .. djb2(url)   -- ★ hash ล้วน ไม่มีนามสกุล
+		if CFG.Refresh or not isfile(fname) then
+			local body = httpGet(url)
+			local ok, werr = pcall(writefile, fname, body)
+			if not ok then error("writefile: " .. tostring(werr), 0) end
+			if not isfile(fname) then error("writefile ok แต่ isfile=false: " .. fname, 0) end
+			if CFG.Verbose then print(("[CACHE] wrote %s (%d bytes)"):format(fname, #body)) end
+		end
+		local id, lerr
+		for i = 1, 3 do
+			local ok, res = pcall(getcustomasset, fname)
+			if ok and res then id = res; break end
+			lerr = res
+			if i < 3 then task.wait(0.15 * i) end
+		end
+		if not id then error("getcustomasset: " .. tostring(lerr), 0) end
+		return id
+	end
+	
+	local N = #URLS
+	local assetIds, errs, pending = {}, {}, N
+	for i, u in ipairs(URLS) do
+		task.spawn(function()
+			local ok, res = pcall(resolveAsset, u)
+			if ok then assetIds[i] = res else errs[i] = res end
+			pending = pending - 1
+		end)
+	end
+	do
+		local t0 = os.clock()
+		while pending > 0 do
+			if os.clock() - t0 > CFG.Timeout then
+				error("[ForExecutorFromStudio] timeout " .. CFG.Timeout .. "s", 0)
+			end
+			task.wait()
+		end
+	end
+	for i = 1, N do
+		if not assetIds[i] then
+			error(("[ForExecutorFromStudio] หน้า %d ล้ม: %s"):format(i, tostring(errs[i])), 0)
+		end
+	end
+	
+	local FW, FH = CFG.FrameSize.X, CFG.FrameSize.Y
+	local TOTAL  = CFG.FrameCount
+	local FPP    = CFG.FramesPerPage
+	
+	-- ═════════════════════════════════════════════════════════════════════
+	--  TARGET: หา ImageLabel + rename "videoframe"
+	-- ═════════════════════════════════════════════════════════════════════
 	local target
 	do
 		local parent = (typeof(script) == "Instance") and script.Parent or nil
@@ -307,173 +411,111 @@ local script = G2L["11"];
 		if target.Name ~= CFG.TargetName then
 			pcall(function() target.Name = CFG.TargetName end)
 		end
-	
-		if CFG.Verbose then
-			warn("[ForExecutorFromStudio] target = " .. cand:GetFullName() ..
-				" → rename → " .. target.Name)
-		end
 	end
 	
-	-- ── HTTP: game:HttpGet first + check HTML ────────────────────────────
-	local function httpGet(url)
-		local lastErr = "unknown"
-	
-		-- 1) game:HttpGet (เสถียรสุด — Xless ใช้ตัวนี้)
-		do
-			local ok, r = pcall(game.HttpGet, game, url, true)
-			if ok and type(r) == "string" and #r > 0 then
-				if not r:find("<!DOCTYPE html>") and not r:find("<html") then
-					if CFG.Verbose then
-						print(("[HTTP] ✓ game:HttpGet · %d bytes · magic=%02X%02X%02X%02X"):format(
-							#r, r:byte(1) or 0, r:byte(2) or 0, r:byte(3) or 0, r:byte(4) or 0))
-					end
-					return r
-				end
-				lastErr = "game:HttpGet: HTML response (404?)"
-			else
-				lastErr = "game:HttpGet: " .. tostring(r)
-			end
+	-- ═════════════════════════════════════════════════════════════════════
+	--  ★★★ FORCE STYLE — กัน "ไม่ขึ้นภาพ/เบี้ยว" ★★★
+	-- ═════════════════════════════════════════════════════════════════════
+	local function forceStyle(img, transparent)
+		pcall(function() img.Visible = true end)
+		pcall(function() img.BackgroundTransparency = 1 end)
+		pcall(function() img.BorderSizePixel = 0 end)
+		if not transparent then
+			pcall(function() img.ImageTransparency = 0 end)
+		else
+			pcall(function() img.ImageTransparency = 1 end)
 		end
-	
-		-- 2) request
-		if type(request) == "function" then
-			local ok, r = pcall(request, { Url = url, Method = "GET" })
-			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
-				if CFG.Verbose then
-					print(("[HTTP] ✓ request · %d bytes · magic=%02X%02X%02X%02X"):format(
-						#r.Body, r.Body:byte(1) or 0, r.Body:byte(2) or 0,
-						r.Body:byte(3) or 0, r.Body:byte(4) or 0))
-				end
-				return r.Body
-			end
-			lastErr = "request failed"
-		end
-	
-		-- 3) http_request
-		if type(http_request) == "function" then
-			local ok, r = pcall(http_request, { Url = url, Method = "GET" })
-			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
-				return r.Body
-			end
-			lastErr = "http_request failed"
-		end
-	
-		-- 4) syn.request
-		if type(syn) == "table" and type(syn.request) == "function" then
-			local ok, r = pcall(syn.request, { Url = url, Method = "GET" })
-			if ok and r and r.Body and #r.Body > 0 and not r.Body:find("<!DOCTYPE html>") then
-				return r.Body
-			end
-			lastErr = "syn.request failed"
-		end
-	
-		error("HTTP GET failed (" .. url .. ")\n  สาเหตุ: " .. tostring(lastErr), 0)
-	end
-	
-	-- ── hash ─────────────────────────────────────────────────────────────
-	local function djb2(s)
-		local h = 5381
-		for i = 1, #s do h = (h * 33 + s:byte(i)) % 4294967296 end
-		return string.format("%08x", h)
-	end
-	
-	local function resolveAsset(url)
-		if url:match("^rbxassetid://") or url:match("^rbxasset://") then return url end
-	
-		local root = "SpriteLib"
-		local dir  = root .. "/" .. tostring(CFG.Folder or "from_studio")
-		if not isfolder(root) then pcall(makefolder, root) end
-		if not isfolder(dir)  then pcall(makefolder, dir)  end
-	
-		-- ★ filename = hash ล้วน ไม่มีนามสกุล (แบบ Xless)
-		local fname = dir .. "/" .. djb2(url)
-	
-		if CFG.Refresh or not isfile(fname) then
-			local body = httpGet(url)
-			local ok, werr = pcall(writefile, fname, body)
-			if not ok then error("writefile: " .. tostring(werr), 0) end
-			if not isfile(fname) then error("writefile ok แต่ isfile=false: " .. fname, 0) end
-			if CFG.Verbose then
-				print(("[CACHE] wrote %s (%d bytes)"):format(fname, #body))
-			end
-		elseif CFG.Verbose then
-			print("[CACHE] hit: " .. fname)
-		end
-	
-		local id, lerr
-		for i = 1, 3 do
-			local ok, res = pcall(getcustomasset, fname)
-			if ok and res then id = res; break end
-			lerr = res
-			if i < 3 then task.wait(0.15 * i) end
-		end
-		if not id then error("getcustomasset: " .. tostring(lerr), 0) end
-		return id
-	end
-	
-	local N = #URLS
-	local assetIds, errs, pending = {}, {}, N
-	for i, u in ipairs(URLS) do
-		task.spawn(function()
-			local ok, res = pcall(resolveAsset, u)
-			if ok then assetIds[i] = res else errs[i] = res end
-			pending = pending - 1
-		end)
-	end
-	do
-		local t0 = os.clock()
-		while pending > 0 do
-			if os.clock() - t0 > CFG.Timeout then
-				error("[ForExecutorFromStudio] timeout " .. CFG.Timeout .. "s", 0)
-			end
-			task.wait()
-		end
-	end
-	for i = 1, N do
-		if not assetIds[i] then
-			error(("[ForExecutorFromStudio] หน้า %d ล้ม: %s"):format(i, tostring(errs[i])), 0)
-		end
-	end
-	
-	local FW, FH = CFG.FrameSize.X, CFG.FrameSize.Y
-	local TOTAL  = CFG.FrameCount
-	local FPP    = CFG.FramesPerPage
-	
-	local function styleImage(img)
-		img.ImageRectSize = CFG.FrameSize
+		-- ★ Pixelated + Stretch = คมและไม่เบี้ยว (เมื่อ aspect ตรง)
 		pcall(function() img.ResampleMode = Enum.ResamplerMode.Pixelated end)
 		pcall(function() img.ScaleType = Enum.ScaleType.Stretch end)
+		-- ★ Slice ล้างค่า default
+		pcall(function() img.SliceCenter = Rect.new(0, 0, 0, 0) end)
+		pcall(function() img.SliceScale = 1 end)
 	end
 	
+	-- ── target setup ─────────────────────────────────────────────────────
+	forceStyle(target, false)   -- target = ตัวที่จะโชว์ (single) หรือตัวคุม (multi)
+	
+	-- ถ้า Size เล็กเกินไป → ตั้ง default
+	do
+		local absX = target.AbsoluteSize.X
+		local absY = target.AbsoluteSize.Y
+		if absX < (CFG.MinSize or 8) or absY < (CFG.MinSize or 8) then
+			local s = tonumber(CFG.ScaleUp) or 4
+			target.Size = UDim2.fromOffset(FW * s, FH * s)
+			if CFG.Verbose then
+				print(("[TARGET] size was too small (%dx%d) → forced %dx%d"):format(
+					absX, absY, FW * s, FH * s))
+			end
+		end
+	end
+	
+	-- ★ UIAspectRatioConstraint — กันเบี้ยว 100%
+	if CFG.AddAspect ~= false then
+		local ar = target:FindFirstChild("__SpriteAR")
+		if not ar then
+			ar = Instance.new("UIAspectRatioConstraint")
+			ar.Name = "__SpriteAR"
+			ar.AspectType = Enum.AspectType.FitWithinMaxSize
+			ar.DominantAxis = Enum.DominantAxis.Width
+			ar.Parent = target
+		end
+		ar.AspectRatio = FW / FH
+	end
+	
+	-- ── ตั้ง ImageRectSize "ก่อน" ────────────────────────────────────────
+	pcall(function() target.ImageRectSize = CFG.FrameSize end)
+	pcall(function() target.ImageRectOffset = Vector2.new(0, 0) end)
+	
+	-- ═════════════════════════════════════════════════════════════════════
+	--  LAYERS (multi-page) หรือ single
+	-- ═════════════════════════════════════════════════════════════════════
 	for _, ch in ipairs(target:GetChildren()) do
 		if ch.Name:sub(1, 12) == "__SpritePage" then ch:Destroy() end
 	end
 	
-	local layers, baseTransparency = {}, 0
+	local layers = {}
 	if N == 1 then
 		target.Image = assetIds[1]
-		styleImage(target)
+		-- ★ set rect size อีกครั้งหลัง set Image (Roblox อาจ reset)
+		pcall(function() target.ImageRectSize = CFG.FrameSize end)
+		pcall(function() target.ImageRectOffset = Vector2.new(0, 0) end)
 	else
-		baseTransparency = target.ImageTransparency
+		-- multi-page: target เป็น container ใส่ layer ลูก
 		target.Image = ""
+		target.ImageTransparency = 1
 		for i = 1, N do
 			local l = Instance.new("ImageLabel")
 			l.Name = "__SpritePage" .. i
-			l.BackgroundTransparency = 1
-			l.BorderSizePixel = 0
 			l.Size = UDim2.fromScale(1, 1)
 			l.Position = UDim2.fromScale(0, 0)
-			l.ZIndex = target.ZIndex
-			l.ImageColor3 = target.ImageColor3
+			l.ZIndex = (target.ZIndex or 1) + i
+			l.ImageColor3 = target.ImageColor3 or Color3.new(1,1,1)
 			l.ImageTransparency = 1
 			l.Image = assetIds[i]
-			styleImage(l)
+			forceStyle(l, true)   -- transparent=true สำหรับ layers ที่ยังไม่ active
+			pcall(function() l.ImageRectSize = CFG.FrameSize end)
+			pcall(function() l.ImageRectOffset = Vector2.new(0, 0) end)
 			l.Parent = target
 			layers[i] = l
 		end
 	end
-	pcall(function() ContentProv:PreloadAsync(N == 1 and { target } or layers) end)
 	
+	-- ★ PreloadAsync + รอ asset โหลด
+	do
+		local list = {}
+		if N == 1 then
+			table.insert(list, target)
+		else
+			for _, l in ipairs(layers) do table.insert(list, l) end
+		end
+		pcall(function() ContentProv:PreloadAsync(list) end)
+		task.wait(0.2)
+	end
+	
+	-- ═════════════════════════════════════════════════════════════════════
+	--  FRAME POSITION TABLE
+	-- ═════════════════════════════════════════════════════════════════════
 	local OFFS, PAGE = {}, {}
 	for i = 0, TOTAL - 1 do
 		local li = i % FPP
@@ -487,6 +529,9 @@ local script = G2L["11"];
 		PAGE[i + 1] = math.floor(i / FPP) + 1
 	end
 	
+	-- ═════════════════════════════════════════════════════════════════════
+	--  ENGINE
+	-- ═════════════════════════════════════════════════════════════════════
 	local idx, acc = 0, 0
 	local curPage = 0
 	local conn, playing, dead = nil, false, false
@@ -496,15 +541,22 @@ local script = G2L["11"];
 		if dead or not target then return end
 		local k = idx + 1
 		if N == 1 then
+			-- ★ set ImageRectSize ทุกครั้ง (กัน Roblox reset)
+			target.ImageRectSize = CFG.FrameSize
 			target.ImageRectOffset = OFFS[k]
 		else
 			local pg = PAGE[k]
 			local layer = layers[pg]
-			layer.ImageRectOffset = OFFS[k]
-			if pg ~= curPage then
-				layer.ImageTransparency = baseTransparency
-				if layers[curPage] then layers[curPage].ImageTransparency = 1 end
-				curPage = pg
+			if layer then
+				layer.ImageRectSize = CFG.FrameSize
+				layer.ImageRectOffset = OFFS[k]
+				if pg ~= curPage then
+					layer.ImageTransparency = 0     -- ★ show
+					if curPage >= 1 and layers[curPage] then
+						layers[curPage].ImageTransparency = 1   -- ★ hide เก่า
+					end
+					curPage = pg
+				end
 			end
 		end
 	end
@@ -563,7 +615,21 @@ local script = G2L["11"];
 		if _G.SpriteFromStudio == API then _G.SpriteFromStudio = nil end
 	end
 	
+	-- ★ apply ครั้งแรกให้ทุกอย่างเข้าที่ (สำคัญ!)
 	apply()
+	task.wait(0.05)
+	
+	if CFG.Verbose then
+		print(("[TARGET] %s (%s)"):format(target:GetFullName(), target.ClassName))
+		print(("[TARGET] Visible=%s  ImageTransparency=%.2f  Size=%s  AbsoluteSize=%dx%d"):format(
+			tostring(target.Visible), target.ImageTransparency,
+			tostring(target.Size), target.AbsoluteSize.X, target.AbsoluteSize.Y))
+		print(("[TARGET] ImageRectSize=%s  ScaleType=%s  ResampleMode=%s"):format(
+			tostring(target.ImageRectSize), tostring(target.ScaleType), tostring(target.ResampleMode)))
+		print(("[FRAME ] %dx%d px · grid %dx%d · %d เฟรม · %d หน้า · %d fps"):format(
+			FW, FH, CFG.Columns, CFG.Rows, TOTAL, N, CFG.Fps))
+	end
+	
 	if CFG.AutoPlay then API:Play() end
 	
 	_G.SpriteFromStudio = API
