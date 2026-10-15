@@ -188,14 +188,14 @@ G2L["18"] = Instance.new("UIAspectRatioConstraint", G2L["17"]);
 local function C_11()
 local script = G2L["11"];
 	-- ═══════════════════════════════════════════════════════════════════════
-	--  ForExecutorFromStudio.lua · v4.0 (FIX ANIMATION · NO DISTORT · ALWAYS VISIBLE)
+	--  ForExecutorFromStudio.lua · v4.1 (FIX FrameSize 1x1 · FORCE STYLE)
 	-- ═══════════════════════════════════════════════════════════════════════
-	--  ★ v4.0 แก้ปัญหา:
-	--    [1] ภาพไม่ขึ้น    → force Visible=true, ImageTransparency=0, Size>0
-	--    [2] ภาพเบี้ยว     → UIAspectRatioConstraint ตาม FrameSize + ScaleType=Stretch
-	--    [3] ภาพไม่เป็นอนิเมชั่น → set ImageRectOffset + ImageRectSize ทุกเฟรม
-	--    [4] ทะลุ/โปร่งใส  → ImageTransparency=0, BackgroundTransparency=1
-	--    [5] target = "videoframe" บังคับ rename
+	--  ★ v4.1:
+	--    • ตรวจ FrameSize — ถ้า 1x1 error ทันที (ไม่เล่นภาพเพี้ยน)
+	--    • force Visible / ImageTransparency=0 / BackgroundTransparency=1
+	--    • Stretch + UIAspectRatioConstraint (AspectRatio = FW/FH) กันเบี้ยว
+	--    • set ImageRectSize ก่อน Offset ทุกเฟรม
+	--    • cache filename = hash ไม่มีนามสกุล (getcustomasset รับได้)
 	--
 	--  ★ URL GitHub raw ต้องมี raw. นำหน้า:
 	--    ✓ https://raw.githubusercontent.com/USER/REPO/main/file.png
@@ -210,13 +210,14 @@ local script = G2L["11"];
 	}
 	
 	local CFG = {
-		Columns       = 8,
-		Rows          = 8,
-		FramesPerPage = 64,
-		FrameCount    = 64,
-		FrameSize     = Vector2.new(1, 1),
+		Columns       = 12,
+		Rows          = 15,
+		FramesPerPage = 180,
+		FrameCount    = 180,
+		-- ★★★ FrameSize ต้องตรงกับที่เว็บคำนวณ (FW × FH px) ★★★
+		FrameSize     = Vector2.new(1100, 1036),
 		Order         = "row",
-		Fps           = 24,
+		Fps           = 11,
 		Loop          = true,
 		AutoPlay      = true,
 		Folder        = "from_studio",
@@ -224,9 +225,6 @@ local script = G2L["11"];
 		Timeout       = 180,
 		Verbose       = true,
 		TargetName    = "videoframe",
-		MinSize       = 8,     -- ถ้า Size น้อยกว่านี้ จะตั้ง default
-		ScaleUp       = 4,     -- คูณขนาดถ้าตั้ง default (FW*Scale)
-		AddAspect     = true,  -- ใส่ UIAspectRatioConstraint กันเบี้ยว
 	}
 	-- ╔═══════════════════════════════════════════════════════════════════╗
 	-- ║  ★★★ อย่าแตะอะไรด้านล่างนี้ ★★★                                    ║
@@ -236,8 +234,7 @@ local script = G2L["11"];
 		local ok, why = pcall(function()
 			assert(type(URLS) == "table" and #URLS >= 1, "URLS ต้องมีอย่างน้อย 1 ลิงก์")
 			for i, u in ipairs(URLS) do
-				assert(type(u) == "string" and (u:match("^https?://") or u:match("^rbxassetid://") or u:match("^rbxasset://")),
-					("URLS[%d] ต้องเป็น http(s) link"):format(i))
+				assert(type(u) == "string" and (u:match("^https?://") or u:match("^rbxassetid://") or u:match("^rbxasset://")), ("URLS[%d] ต้องเป็น http(s) link"):format(i))
 				assert(u:find("xxxxxxxx") == nil, ("URLS[%d] ลืมแก้ URL!"):format(i))
 				assert(u:find("USER/REPO") == nil, ("URLS[%d] ลืมแก้ USER/REPO!"):format(i))
 			end
@@ -248,15 +245,16 @@ local script = G2L["11"];
 			assert(CFG.FrameCount > CFG.FramesPerPage * (#URLS - 1), "URLS เกิน")
 			assert(CFG.Order == "row" or CFG.Order == "col", "Order ผิด")
 			assert(CFG.Fps >= 1 and CFG.Fps <= 240, "Fps ผิด")
+			-- ★★★ เช็ค FrameSize กัน 1x1 ★★★
+			assert(CFG.FrameSize.X >= 2 and CFG.FrameSize.Y >= 2,
+				"FrameSize เล็กเกินไป (" .. CFG.FrameSize.X .. "×" .. CFG.FrameSize.Y .. ") — โหลด sprite sheet ใหม่ หรือตรวจ Columns/Rows")
 		end)
 		if not ok then error("[ForExecutorFromStudio] CONFIG: " .. tostring(why), 0) end
 		CFG.FrameSize = Vector2.new(math.floor(CFG.FrameSize.X), math.floor(CFG.FrameSize.Y))
 	end
 	
 	do
-		local exec = (type(writefile) == "function")
-			and (type(getcustomasset) == "function")
-			and (type(makefolder) == "function")
+		local exec = (type(writefile) == "function") and (type(getcustomasset) == "function") and (type(makefolder) == "function")
 		if not exec then
 			warn("[ForExecutorFromStudio] Studio mode — ปกติ → gui2lua ไป Execute บน executor")
 			return
@@ -266,7 +264,6 @@ local script = G2L["11"];
 	local RunService  = game:GetService("RunService")
 	local ContentProv = game:GetService("ContentProvider")
 	
-	-- ── HTTP (game:HttpGet first) ────────────────────────────────────────
 	local function httpGet(url)
 		local lastErr = "unknown"
 		do
@@ -274,8 +271,7 @@ local script = G2L["11"];
 			if ok and type(r) == "string" and #r > 0 then
 				if not r:find("<!DOCTYPE html>") and not r:find("<html") then
 					if CFG.Verbose then
-						print(("[HTTP] ✓ game:HttpGet · %d bytes · magic=%02X%02X%02X%02X"):format(
-							#r, r:byte(1) or 0, r:byte(2) or 0, r:byte(3) or 0, r:byte(4) or 0))
+						print(("[HTTP] ✓ game:HttpGet · %d bytes · magic=%02X%02X%02X%02X"):format(#r, r:byte(1) or 0, r:byte(2) or 0, r:byte(3) or 0, r:byte(4) or 0))
 					end
 					return r
 				end
@@ -320,7 +316,7 @@ local script = G2L["11"];
 		local dir  = root .. "/" .. tostring(CFG.Folder or "from_studio")
 		if not isfolder(root) then pcall(makefolder, root) end
 		if not isfolder(dir)  then pcall(makefolder, dir)  end
-		local fname = dir .. "/" .. djb2(url)   -- ★ hash ล้วน ไม่มีนามสกุล
+		local fname = dir .. "/" .. djb2(url)
 		if CFG.Refresh or not isfile(fname) then
 			local body = httpGet(url)
 			local ok, werr = pcall(writefile, fname, body)
@@ -351,125 +347,84 @@ local script = G2L["11"];
 	do
 		local t0 = os.clock()
 		while pending > 0 do
-			if os.clock() - t0 > CFG.Timeout then
-				error("[ForExecutorFromStudio] timeout " .. CFG.Timeout .. "s", 0)
-			end
+			if os.clock() - t0 > CFG.Timeout then error("[ForExecutorFromStudio] timeout " .. CFG.Timeout .. "s", 0) end
 			task.wait()
 		end
 	end
 	for i = 1, N do
-		if not assetIds[i] then
-			error(("[ForExecutorFromStudio] หน้า %d ล้ม: %s"):format(i, tostring(errs[i])), 0)
-		end
+		if not assetIds[i] then error(("[ForExecutorFromStudio] หน้า %d ล้ม: %s"):format(i, tostring(errs[i])), 0) end
 	end
 	
 	local FW, FH = CFG.FrameSize.X, CFG.FrameSize.Y
 	local TOTAL  = CFG.FrameCount
 	local FPP    = CFG.FramesPerPage
 	
-	-- ═════════════════════════════════════════════════════════════════════
-	--  TARGET: หา ImageLabel + rename "videoframe"
-	-- ═════════════════════════════════════════════════════════════════════
 	local target
 	do
 		local parent = (typeof(script) == "Instance") and script.Parent or nil
 		local cand = nil
 		local want = tostring(CFG.TargetName or "videoframe"):lower()
-	
 		if parent then
-			if parent.Name:lower() == want
-				and (parent:IsA("ImageLabel") or parent:IsA("ImageButton")) then
-				cand = parent
-			end
+			if parent.Name:lower() == want and (parent:IsA("ImageLabel") or parent:IsA("ImageButton")) then cand = parent end
 			if not cand then
 				for _, d in ipairs(parent:GetDescendants()) do
-					if d.Name:lower() == want
-						and (d:IsA("ImageLabel") or d:IsA("ImageButton")) then
-						cand = d; break
-					end
+					if d.Name:lower() == want and (d:IsA("ImageLabel") or d:IsA("ImageButton")) then cand = d; break end
 				end
 			end
 			if not cand then
-				if parent:IsA("ImageLabel") or parent:IsA("ImageButton") then
-					cand = parent
+				if parent:IsA("ImageLabel") or parent:IsA("ImageButton") then cand = parent
 				else
 					for _, d in ipairs(parent:GetDescendants()) do
-						if d:IsA("ImageLabel") or d:IsA("ImageButton") then
-							cand = d; break
-						end
+						if d:IsA("ImageLabel") or d:IsA("ImageButton") then cand = d; break end
 					end
 				end
 			end
 		end
-	
-		if not cand then
-			error("[ForExecutorFromStudio] ไม่เจอ ImageLabel/ImageButton ใต้ " ..
-				(parent and parent:GetFullName() or "script.Parent=nil"), 0)
-		end
-	
+		if not cand then error("[ForExecutorFromStudio] ไม่เจอ ImageLabel/ImageButton ใต้ " .. (parent and parent:GetFullName() or "script.Parent=nil"), 0) end
 		target = cand
-		if target.Name ~= CFG.TargetName then
-			pcall(function() target.Name = CFG.TargetName end)
-		end
+		if target.Name ~= CFG.TargetName then pcall(function() target.Name = CFG.TargetName end) end
 	end
 	
-	-- ═════════════════════════════════════════════════════════════════════
-	--  ★★★ FORCE STYLE — กัน "ไม่ขึ้นภาพ/เบี้ยว" ★★★
-	-- ═════════════════════════════════════════════════════════════════════
 	local function forceStyle(img, transparent)
 		pcall(function() img.Visible = true end)
 		pcall(function() img.BackgroundTransparency = 1 end)
 		pcall(function() img.BorderSizePixel = 0 end)
-		if not transparent then
-			pcall(function() img.ImageTransparency = 0 end)
-		else
-			pcall(function() img.ImageTransparency = 1 end)
-		end
-		-- ★ Pixelated + Stretch = คมและไม่เบี้ยว (เมื่อ aspect ตรง)
+		pcall(function() img.ImageTransparency = transparent and 1 or 0 end)
 		pcall(function() img.ResampleMode = Enum.ResamplerMode.Pixelated end)
 		pcall(function() img.ScaleType = Enum.ScaleType.Stretch end)
-		-- ★ Slice ล้างค่า default
 		pcall(function() img.SliceCenter = Rect.new(0, 0, 0, 0) end)
 		pcall(function() img.SliceScale = 1 end)
 	end
 	
-	-- ── target setup ─────────────────────────────────────────────────────
-	forceStyle(target, false)   -- target = ตัวที่จะโชว์ (single) หรือตัวคุม (multi)
+	forceStyle(target, false)
 	
-	-- ถ้า Size เล็กเกินไป → ตั้ง default
+	-- ── target setup ──
 	do
+		-- ★ ถ้า ImageLabel ขนาด 0x0 → ตั้งขนาดให้ใหญ่พอ
 		local absX = target.AbsoluteSize.X
 		local absY = target.AbsoluteSize.Y
-		if absX < (CFG.MinSize or 8) or absY < (CFG.MinSize or 8) then
-			local s = tonumber(CFG.ScaleUp) or 4
-			target.Size = UDim2.fromOffset(FW * s, FH * s)
-			if CFG.Verbose then
-				print(("[TARGET] size was too small (%dx%d) → forced %dx%d"):format(
-					absX, absY, FW * s, FH * s))
-			end
+		if absX < 8 or absY < 8 then
+			target.Size = UDim2.fromOffset(FW * 4, FH * 4)
+			if CFG.Verbose then print(("[TARGET] size small (%dx%d) → forced %dx%d"):format(absX, absY, FW * 4, FH * 4)) end
 		end
 	end
 	
-	-- ★ UIAspectRatioConstraint — กันเบี้ยว 100%
-	if CFG.AddAspect ~= false then
-		local ar = target:FindFirstChild("__SpriteAR")
-		if not ar then
-			ar = Instance.new("UIAspectRatioConstraint")
-			ar.Name = "__SpriteAR"
-			ar.AspectType = Enum.AspectType.FitWithinMaxSize
-			ar.DominantAxis = Enum.DominantAxis.Width
-			ar.Parent = target
-		end
-		ar.AspectRatio = FW / FH
+	-- ★ UIAspectRatioConstraint กันเบี้ยว
+	local ar = target:FindFirstChild("__SpriteAR")
+	if not ar then
+		ar = Instance.new("UIAspectRatioConstraint")
+		ar.Name = "__SpriteAR"
+		ar.AspectType = Enum.AspectType.FitWithinMaxSize
+		ar.DominantAxis = Enum.DominantAxis.Width
+		ar.Parent = target
 	end
+	ar.AspectRatio = FW / FH
 	
-	-- ── ตั้ง ImageRectSize "ก่อน" ────────────────────────────────────────
+	-- ★ set ImageRectSize ก่อน
 	pcall(function() target.ImageRectSize = CFG.FrameSize end)
 	pcall(function() target.ImageRectOffset = Vector2.new(0, 0) end)
 	
-	-- ═════════════════════════════════════════════════════════════════════
-	--  LAYERS (multi-page) หรือ single
-	-- ═════════════════════════════════════════════════════════════════════
+	-- ── layers (multi-page) ──
 	for _, ch in ipairs(target:GetChildren()) do
 		if ch.Name:sub(1, 12) == "__SpritePage" then ch:Destroy() end
 	end
@@ -477,11 +432,9 @@ local script = G2L["11"];
 	local layers = {}
 	if N == 1 then
 		target.Image = assetIds[1]
-		-- ★ set rect size อีกครั้งหลัง set Image (Roblox อาจ reset)
 		pcall(function() target.ImageRectSize = CFG.FrameSize end)
 		pcall(function() target.ImageRectOffset = Vector2.new(0, 0) end)
 	else
-		-- multi-page: target เป็น container ใส่ layer ลูก
 		target.Image = ""
 		target.ImageTransparency = 1
 		for i = 1, N do
@@ -493,7 +446,7 @@ local script = G2L["11"];
 			l.ImageColor3 = target.ImageColor3 or Color3.new(1,1,1)
 			l.ImageTransparency = 1
 			l.Image = assetIds[i]
-			forceStyle(l, true)   -- transparent=true สำหรับ layers ที่ยังไม่ active
+			forceStyle(l, true)
 			pcall(function() l.ImageRectSize = CFG.FrameSize end)
 			pcall(function() l.ImageRectOffset = Vector2.new(0, 0) end)
 			l.Parent = target
@@ -501,37 +454,26 @@ local script = G2L["11"];
 		end
 	end
 	
-	-- ★ PreloadAsync + รอ asset โหลด
 	do
 		local list = {}
-		if N == 1 then
-			table.insert(list, target)
-		else
-			for _, l in ipairs(layers) do table.insert(list, l) end
-		end
+		if N == 1 then table.insert(list, target)
+		else for _, l in ipairs(layers) do table.insert(list, l) end end
 		pcall(function() ContentProv:PreloadAsync(list) end)
-		task.wait(0.2)
+		task.wait(0.25)
 	end
 	
-	-- ═════════════════════════════════════════════════════════════════════
-	--  FRAME POSITION TABLE
-	-- ═════════════════════════════════════════════════════════════════════
+	-- ── frame table ──
 	local OFFS, PAGE = {}, {}
 	for i = 0, TOTAL - 1 do
 		local li = i % FPP
 		local col, row
-		if CFG.Order == "col" then
-			col = math.floor(li / CFG.Rows); row = li % CFG.Rows
-		else
-			col = li % CFG.Columns; row = math.floor(li / CFG.Columns)
-		end
+		if CFG.Order == "col" then col = math.floor(li / CFG.Rows); row = li % CFG.Rows
+		else col = li % CFG.Columns; row = math.floor(li / CFG.Columns) end
 		OFFS[i + 1] = Vector2.new(math.floor(col * FW), math.floor(row * FH))
 		PAGE[i + 1] = math.floor(i / FPP) + 1
 	end
 	
-	-- ═════════════════════════════════════════════════════════════════════
-	--  ENGINE
-	-- ═════════════════════════════════════════════════════════════════════
+	-- ── engine ──
 	local idx, acc = 0, 0
 	local curPage = 0
 	local conn, playing, dead = nil, false, false
@@ -541,7 +483,6 @@ local script = G2L["11"];
 		if dead or not target then return end
 		local k = idx + 1
 		if N == 1 then
-			-- ★ set ImageRectSize ทุกครั้ง (กัน Roblox reset)
 			target.ImageRectSize = CFG.FrameSize
 			target.ImageRectOffset = OFFS[k]
 		else
@@ -551,10 +492,8 @@ local script = G2L["11"];
 				layer.ImageRectSize = CFG.FrameSize
 				layer.ImageRectOffset = OFFS[k]
 				if pg ~= curPage then
-					layer.ImageTransparency = 0     -- ★ show
-					if curPage >= 1 and layers[curPage] then
-						layers[curPage].ImageTransparency = 1   -- ★ hide เก่า
-					end
+					layer.ImageTransparency = 0
+					if curPage >= 1 and layers[curPage] then layers[curPage].ImageTransparency = 1 end
 					curPage = pg
 				end
 			end
@@ -572,7 +511,6 @@ local script = G2L["11"];
 	
 	local API = {}
 	API.OnFinish = finishedEvent.Event
-	
 	function API:Play()
 		if playing or dead then return end
 		playing = true; acc = 0
@@ -593,10 +531,7 @@ local script = G2L["11"];
 			end
 		end)
 	end
-	function API:Pause()
-		playing = false
-		if conn then conn:Disconnect(); conn = nil end
-	end
+	function API:Pause() playing = false; if conn then conn:Disconnect(); conn = nil end end
 	function API:Stop() self:Pause(); idx = 0; acc = 0; apply() end
 	function API:SetFrame(i) idx = math.clamp(math.floor(i), 0, TOTAL - 1); apply() end
 	function API:GetFrame() return idx end
@@ -615,26 +550,19 @@ local script = G2L["11"];
 		if _G.SpriteFromStudio == API then _G.SpriteFromStudio = nil end
 	end
 	
-	-- ★ apply ครั้งแรกให้ทุกอย่างเข้าที่ (สำคัญ!)
 	apply()
 	task.wait(0.05)
 	
 	if CFG.Verbose then
 		print(("[TARGET] %s (%s)"):format(target:GetFullName(), target.ClassName))
-		print(("[TARGET] Visible=%s  ImageTransparency=%.2f  Size=%s  AbsoluteSize=%dx%d"):format(
-			tostring(target.Visible), target.ImageTransparency,
-			tostring(target.Size), target.AbsoluteSize.X, target.AbsoluteSize.Y))
-		print(("[TARGET] ImageRectSize=%s  ScaleType=%s  ResampleMode=%s"):format(
-			tostring(target.ImageRectSize), tostring(target.ScaleType), tostring(target.ResampleMode)))
-		print(("[FRAME ] %dx%d px · grid %dx%d · %d เฟรม · %d หน้า · %d fps"):format(
-			FW, FH, CFG.Columns, CFG.Rows, TOTAL, N, CFG.Fps))
+		print(("[TARGET] Visible=%s  ImgTrans=%.2f  Size=%s  Abs=%dx%d"):format(tostring(target.Visible), target.ImageTransparency, tostring(target.Size), target.AbsoluteSize.X, target.AbsoluteSize.Y))
+		print(("[TARGET] ImageRectSize=%s  ScaleType=%s"):format(tostring(target.ImageRectSize), tostring(target.ScaleType)))
+		print(("[FRAME ] %dx%d px · grid %dx%d · %d เฟรม · %d หน้า · %d fps"):format(FW, FH, CFG.Columns, CFG.Rows, TOTAL, N, CFG.Fps))
 	end
 	
 	if CFG.AutoPlay then API:Play() end
-	
 	_G.SpriteFromStudio = API
-	print(("[ForExecutorFromStudio] ✓ %s (%s) · %d เฟรม · %d หน้า · %d fps · %dx%d"):format(
-		target:GetFullName(), target.Name, TOTAL, N, CFG.Fps, FW, FH))
+	print(("[ForExecutorFromStudio] ✓ %s (%s) · %d เฟรม · %d หน้า · %d fps · %dx%d"):format(target:GetFullName(), target.Name, TOTAL, N, CFG.Fps, FW, FH))
 	
 end;
 task.spawn(C_11);
